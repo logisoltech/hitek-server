@@ -709,6 +709,8 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
       return res.status(400).json({ error: 'Price is required.' });
     }
 
+    const requestedFeatured = parseOptionalBoolean(req.body.featured);
+
     const specsPayload = parseSpecsPayload(req.body.specs);
     const specs = mapSpecs(category, specsPayload);
 
