@@ -69,6 +69,14 @@ const createEmailTransporter = () => {
 
 const emailTransporter = createEmailTransporter();
 
+// Log email configuration status
+if (emailTransporter) {
+  console.log('✅ Email transporter configured successfully');
+} else {
+  console.log('⚠️  Email transporter not configured - emails will be logged to console');
+  console.log('   Set EMAIL_USER and EMAIL_PASSWORD (or SMTP_* variables) to enable email sending');
+}
+
 const supabaseUrl = process.env.SUPABASE_URL || 'https://svyrkggjjkbxsbvumfxj.supabase.co';
 // Use service role key for server-side operations (bypasses RLS)
 // If not set, fall back to anon key (but may fail if RLS is enabled)
@@ -337,9 +345,13 @@ router.post('/send-otp', async (req, res) => {
     // Send email with OTP
     const fromEmail = process.env.EMAIL_FROM || process.env.EMAIL_USER || 'noreply@hitechcomputers.com';
     
+    let emailSent = false;
+    
     if (emailTransporter) {
       try {
-        await emailTransporter.sendMail({
+        console.log('📧 Attempting to send OTP email to:', originalEmail);
+        // Add timeout to prevent hanging (5 seconds)
+        const emailPromise = emailTransporter.sendMail({
           from: fromEmail,
           to: originalEmail,
           subject: 'Verify your email - Hi-Tek Computers',
@@ -357,11 +369,21 @@ router.post('/send-otp', async (req, res) => {
           `,
           text: `Your verification code is: ${otp}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this code, please ignore this email.`,
         });
+
+        // Wait max 5 seconds for email to send
+        await Promise.race([
+          emailPromise,
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Email sending timeout after 5 seconds')), 5000)
+          )
+        ]);
+
+        emailSent = true;
         console.log('✅ OTP email sent successfully to:', originalEmail);
       } catch (emailError) {
-        console.error('❌ Failed to send OTP email:', emailError);
-        // Still return success but log the error
-        // In production, you might want to return an error instead
+        console.error('❌ Failed to send OTP email:', emailError.message || emailError);
+        console.error('Email error stack:', emailError.stack);
+        // Continue - OTP is still stored and can be used
       }
     } else {
       // Fallback: Log to console if email is not configured
@@ -376,10 +398,12 @@ router.post('/send-otp', async (req, res) => {
       console.log('⚠️  Configure EMAIL_USER and EMAIL_PASSWORD environment variables to send real emails');
     }
 
+    // Always return success immediately (don't wait for email)
+    // Include OTP in response if email failed or not configured (for testing/fallback)
     res.json({ 
-      message: 'OTP sent successfully',
-      // Only include OTP in response if email is not configured (for testing)
-      otp: !emailTransporter ? otp : undefined
+      message: emailSent ? 'OTP sent successfully via email' : 'OTP generated successfully',
+      // Include OTP in response if email failed or not configured
+      otp: !emailSent ? otp : undefined
     });
   } catch (error) {
     console.error('Send OTP error:', error);
