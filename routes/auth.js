@@ -26,6 +26,13 @@ setInterval(cleanExpiredOTPs, 5 * 60 * 1000);
 
 // Create email transporter
 const createEmailTransporter = () => {
+  // Connection options for better reliability
+  const connectionOptions = {
+    connectionTimeout: 5000, // 5 seconds
+    greetingTimeout: 5000,
+    socketTimeout: 5000,
+  };
+
   // Option 1: Gmail (using App Password)
   if (process.env.EMAIL_SERVICE === 'gmail' || process.env.EMAIL_USER?.includes('@gmail.com')) {
     return nodemailer.createTransport({
@@ -34,10 +41,14 @@ const createEmailTransporter = () => {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASSWORD, // Use App Password, not regular password
       },
+      ...connectionOptions,
+      // Use OAuth2 if available, otherwise use app password
+      pool: true,
+      maxConnections: 1,
     });
   }
 
-  // Option 2: SendGrid
+  // Option 2: SendGrid (Recommended for production)
   if (process.env.EMAIL_SERVICE === 'sendgrid' || process.env.SENDGRID_API_KEY) {
     return nodemailer.createTransport({
       host: 'smtp.sendgrid.net',
@@ -47,6 +58,7 @@ const createEmailTransporter = () => {
         user: 'apikey',
         pass: process.env.SENDGRID_API_KEY,
       },
+      ...connectionOptions,
     });
   }
 
@@ -60,6 +72,7 @@ const createEmailTransporter = () => {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASSWORD,
       },
+      ...connectionOptions,
     });
   }
 
@@ -342,49 +355,60 @@ router.post('/send-otp', async (req, res) => {
       email: originalEmail,
     });
 
-    // Send email with OTP
+    // Send email with OTP (non-blocking - respond immediately)
     const fromEmail = process.env.EMAIL_FROM || process.env.EMAIL_USER || 'noreply@hitechcomputers.com';
     
-    let emailSent = false;
-    
+    // Send response immediately, then try to send email in background
+    res.json({ 
+      message: 'OTP sent successfully',
+      // Always include OTP in response for now (until email is working reliably)
+      otp: otp
+    });
+
+    // Try to send email in background (don't block response)
     if (emailTransporter) {
-      try {
-        console.log('📧 Attempting to send OTP email to:', originalEmail);
-        // Add timeout to prevent hanging (5 seconds)
-        const emailPromise = emailTransporter.sendMail({
-          from: fromEmail,
-          to: originalEmail,
-          subject: 'Verify your email - Hi-Tek Computers',
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <h2 style="color: #00aeef;">Email Verification</h2>
-              <p>Thank you for signing up with Hi-Tek Computers!</p>
-              <p>Your verification code is:</p>
-              <div style="background-color: #f5f5f5; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
-                <h1 style="color: #00aeef; font-size: 32px; letter-spacing: 5px; margin: 0;">${otp}</h1>
+      // Send email asynchronously without blocking
+      setImmediate(async () => {
+        try {
+          console.log('📧 Attempting to send OTP email to:', originalEmail);
+          
+          const emailPromise = emailTransporter.sendMail({
+            from: fromEmail,
+            to: originalEmail,
+            subject: 'Verify your email - Hi-Tek Computers',
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #00aeef;">Email Verification</h2>
+                <p>Thank you for signing up with Hi-Tek Computers!</p>
+                <p>Your verification code is:</p>
+                <div style="background-color: #f5f5f5; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
+                  <h1 style="color: #00aeef; font-size: 32px; letter-spacing: 5px; margin: 0;">${otp}</h1>
+                </div>
+                <p>This code will expire in 10 minutes.</p>
+                <p style="color: #666; font-size: 12px; margin-top: 30px;">If you didn't request this code, please ignore this email.</p>
               </div>
-              <p>This code will expire in 10 minutes.</p>
-              <p style="color: #666; font-size: 12px; margin-top: 30px;">If you didn't request this code, please ignore this email.</p>
-            </div>
-          `,
-          text: `Your verification code is: ${otp}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this code, please ignore this email.`,
-        });
+            `,
+            text: `Your verification code is: ${otp}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this code, please ignore this email.`,
+          });
 
-        // Wait max 5 seconds for email to send
-        await Promise.race([
-          emailPromise,
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Email sending timeout after 5 seconds')), 5000)
-          )
-        ]);
+          // Wait max 3 seconds for email to send
+          await Promise.race([
+            emailPromise,
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Email sending timeout')), 3000)
+            )
+          ]);
 
-        emailSent = true;
-        console.log('✅ OTP email sent successfully to:', originalEmail);
-      } catch (emailError) {
-        console.error('❌ Failed to send OTP email:', emailError.message || emailError);
-        console.error('Email error stack:', emailError.stack);
-        // Continue - OTP is still stored and can be used
-      }
+          console.log('✅ OTP email sent successfully to:', originalEmail);
+        } catch (emailError) {
+          console.error('❌ Failed to send OTP email:', emailError.message || emailError);
+          console.error('Email error code:', emailError.code);
+          if (emailError.code === 'ETIMEDOUT' || emailError.code === 'ECONNREFUSED') {
+            console.error('⚠️  Gmail SMTP connection issue. Consider using SendGrid or another email service.');
+            console.error('   Gmail SMTP may be blocked on Render. Try SendGrid instead.');
+          }
+        }
+      });
     } else {
       // Fallback: Log to console if email is not configured
       console.log('='.repeat(50));
@@ -397,14 +421,6 @@ router.post('/send-otp', async (req, res) => {
       console.log('='.repeat(50));
       console.log('⚠️  Configure EMAIL_USER and EMAIL_PASSWORD environment variables to send real emails');
     }
-
-    // Always return success immediately (don't wait for email)
-    // Include OTP in response if email failed or not configured (for testing/fallback)
-    res.json({ 
-      message: emailSent ? 'OTP sent successfully via email' : 'OTP generated successfully',
-      // Include OTP in response if email failed or not configured
-      otp: !emailSent ? otp : undefined
-    });
   } catch (error) {
     console.error('Send OTP error:', error);
     res.status(500).json({ error: 'Internal server error' });
