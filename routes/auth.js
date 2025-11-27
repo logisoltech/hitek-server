@@ -2,6 +2,27 @@ const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
 
+// In-memory OTP storage (in production, use Redis or database)
+const otpStore = new Map();
+
+// Generate 6-digit OTP
+const generateOTP = () => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+// Clean expired OTPs (older than 10 minutes)
+const cleanExpiredOTPs = () => {
+  const now = Date.now();
+  for (const [email, data] of otpStore.entries()) {
+    if (now - data.timestamp > 10 * 60 * 1000) {
+      otpStore.delete(email);
+    }
+  }
+};
+
+// Run cleanup every 5 minutes
+setInterval(cleanExpiredOTPs, 5 * 60 * 1000);
+
 const supabaseUrl = process.env.SUPABASE_URL || 'https://svyrkggjjkbxsbvumfxj.supabase.co';
 // Use service role key for server-side operations (bypasses RLS)
 // If not set, fall back to anon key (but may fail if RLS is enabled)
@@ -222,7 +243,140 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Register endpoint - Store directly in users table
+// Send OTP endpoint
+router.post('/send-otp', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const originalEmail = email.trim();
+
+    // Check if user already exists
+    const { data: allUsers, error: fetchError } = await supabase
+      .from('users')
+      .select('email');
+
+    if (fetchError) {
+      console.error('Database query error:', fetchError);
+      return res.status(500).json({ 
+        error: 'Database connection failed',
+        details: fetchError.message 
+      });
+    }
+
+    const existingUser = allUsers?.find(u => {
+      if (!u.email) return false;
+      return u.email.trim().toLowerCase() === normalizedEmail;
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'An account with this email already exists' });
+    }
+
+    // Generate OTP
+    const otp = generateOTP();
+    const timestamp = Date.now();
+
+    // Store OTP (expires in 10 minutes)
+    otpStore.set(normalizedEmail, {
+      otp,
+      timestamp,
+      email: originalEmail,
+    });
+
+    // TODO: Send email with OTP
+    // For now, log it to console (in production, use email service like Nodemailer, SendGrid, etc.)
+    console.log('='.repeat(50));
+    console.log('📧 OTP EMAIL (Development Mode)');
+    console.log('='.repeat(50));
+    console.log(`To: ${originalEmail}`);
+    console.log(`Subject: Verify your email - Hi-Tek Computers`);
+    console.log(`\nYour verification code is: ${otp}`);
+    console.log(`This code will expire in 10 minutes.`);
+    console.log('='.repeat(50));
+
+    // In production, uncomment and configure email sending:
+    /*
+    const nodemailer = require('nodemailer');
+    const transporter = nodemailer.createTransport({
+      // Configure your email service here
+      // Example for Gmail: service: 'gmail', auth: { user, pass }
+    });
+    
+    await transporter.sendMail({
+      from: 'noreply@hitechcomputers.com',
+      to: originalEmail,
+      subject: 'Verify your email - Hi-Tek Computers',
+      html: `
+        <h2>Email Verification</h2>
+        <p>Your verification code is: <strong>${otp}</strong></p>
+        <p>This code will expire in 10 minutes.</p>
+      `
+    });
+    */
+
+    res.json({ 
+      message: 'OTP sent successfully',
+      // In development, include OTP in response for testing
+      // Remove this in production!
+      otp: process.env.NODE_ENV === 'development' ? otp : undefined
+    });
+  } catch (error) {
+    console.error('Send OTP error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Verify OTP endpoint
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+      return res.status(400).json({ error: 'Email and OTP are required' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const storedData = otpStore.get(normalizedEmail);
+
+    if (!storedData) {
+      return res.status(400).json({ error: 'OTP not found or expired. Please request a new one.' });
+    }
+
+    // Check if OTP expired (10 minutes)
+    const now = Date.now();
+    if (now - storedData.timestamp > 10 * 60 * 1000) {
+      otpStore.delete(normalizedEmail);
+      return res.status(400).json({ error: 'OTP has expired. Please request a new one.' });
+    }
+
+    // Verify OTP
+    if (storedData.otp !== otp.trim()) {
+      return res.status(400).json({ error: 'Invalid OTP. Please try again.' });
+    }
+
+    // OTP verified - mark as verified (valid for 5 minutes)
+    otpStore.set(normalizedEmail, {
+      ...storedData,
+      verified: true,
+      verifiedAt: now,
+    });
+
+    res.json({ 
+      message: 'OTP verified successfully',
+      email: storedData.email
+    });
+  } catch (error) {
+    console.error('Verify OTP error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Register endpoint - Store directly in users table (now requires OTP verification)
 router.post('/register', async (req, res) => {
   try {
     const { email, password, first_name, last_name } = req.body;
@@ -239,6 +393,25 @@ router.post('/register', async (req, res) => {
 
     const normalizedEmail = email.trim().toLowerCase();
     const originalEmail = email.trim();
+
+    // Check if OTP was verified
+    const storedData = otpStore.get(normalizedEmail);
+    if (!storedData || !storedData.verified) {
+      return res.status(400).json({ 
+        error: 'Email not verified. Please verify your email with OTP first.',
+        requiresVerification: true
+      });
+    }
+
+    // Check if verification is still valid (5 minutes)
+    const now = Date.now();
+    if (!storedData.verifiedAt || now - storedData.verifiedAt > 5 * 60 * 1000) {
+      otpStore.delete(normalizedEmail);
+      return res.status(400).json({ 
+        error: 'Email verification expired. Please verify your email again.',
+        requiresVerification: true
+      });
+    }
 
     // Check if user already exists by fetching all users
     console.log('Checking if user already exists...');
@@ -380,6 +553,9 @@ router.post('/register', async (req, res) => {
 
     console.log('✅ Registration successful for user:', originalEmail);
     console.log('✅ Inserted user ID:', insertResult.id);
+
+    // Remove OTP from store after successful registration
+    otpStore.delete(normalizedEmail);
 
     // Remove password from response for security
     const { password: userPassword, ...userData } = insertResult;
