@@ -27,7 +27,7 @@ router.get('/users', async (req, res) => {
     const { data, error } = await supabase
       .from('cmsusers')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('id', { ascending: false });
 
     if (error) {
       console.error('Supabase error fetching CMS users:', error);
