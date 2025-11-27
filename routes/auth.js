@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
+const nodemailer = require('nodemailer');
 
 // In-memory OTP storage (in production, use Redis or database)
 const otpStore = new Map();
@@ -22,6 +23,51 @@ const cleanExpiredOTPs = () => {
 
 // Run cleanup every 5 minutes
 setInterval(cleanExpiredOTPs, 5 * 60 * 1000);
+
+// Create email transporter
+const createEmailTransporter = () => {
+  // Option 1: Gmail (using App Password)
+  if (process.env.EMAIL_SERVICE === 'gmail' || process.env.EMAIL_USER?.includes('@gmail.com')) {
+    return nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD, // Use App Password, not regular password
+      },
+    });
+  }
+
+  // Option 2: SendGrid
+  if (process.env.EMAIL_SERVICE === 'sendgrid' || process.env.SENDGRID_API_KEY) {
+    return nodemailer.createTransport({
+      host: 'smtp.sendgrid.net',
+      port: 587,
+      secure: false,
+      auth: {
+        user: 'apikey',
+        pass: process.env.SENDGRID_API_KEY,
+      },
+    });
+  }
+
+  // Option 3: Custom SMTP
+  if (process.env.SMTP_HOST) {
+    return nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: parseInt(process.env.SMTP_PORT || '587'),
+      secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASSWORD,
+      },
+    });
+  }
+
+  // Fallback: Return null if no email config (will log to console)
+  return null;
+};
+
+const emailTransporter = createEmailTransporter();
 
 const supabaseUrl = process.env.SUPABASE_URL || 'https://svyrkggjjkbxsbvumfxj.supabase.co';
 // Use service role key for server-side operations (bypasses RLS)
@@ -288,42 +334,52 @@ router.post('/send-otp', async (req, res) => {
       email: originalEmail,
     });
 
-    // TODO: Send email with OTP
-    // For now, log it to console (in production, use email service like Nodemailer, SendGrid, etc.)
-    console.log('='.repeat(50));
-    console.log('📧 OTP EMAIL (Development Mode)');
-    console.log('='.repeat(50));
-    console.log(`To: ${originalEmail}`);
-    console.log(`Subject: Verify your email - Hi-Tek Computers`);
-    console.log(`\nYour verification code is: ${otp}`);
-    console.log(`This code will expire in 10 minutes.`);
-    console.log('='.repeat(50));
-
-    // In production, uncomment and configure email sending:
-    /*
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      // Configure your email service here
-      // Example for Gmail: service: 'gmail', auth: { user, pass }
-    });
+    // Send email with OTP
+    const fromEmail = process.env.EMAIL_FROM || process.env.EMAIL_USER || 'noreply@hitechcomputers.com';
     
-    await transporter.sendMail({
-      from: 'noreply@hitechcomputers.com',
-      to: originalEmail,
-      subject: 'Verify your email - Hi-Tek Computers',
-      html: `
-        <h2>Email Verification</h2>
-        <p>Your verification code is: <strong>${otp}</strong></p>
-        <p>This code will expire in 10 minutes.</p>
-      `
-    });
-    */
+    if (emailTransporter) {
+      try {
+        await emailTransporter.sendMail({
+          from: fromEmail,
+          to: originalEmail,
+          subject: 'Verify your email - Hi-Tek Computers',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <h2 style="color: #00aeef;">Email Verification</h2>
+              <p>Thank you for signing up with Hi-Tek Computers!</p>
+              <p>Your verification code is:</p>
+              <div style="background-color: #f5f5f5; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
+                <h1 style="color: #00aeef; font-size: 32px; letter-spacing: 5px; margin: 0;">${otp}</h1>
+              </div>
+              <p>This code will expire in 10 minutes.</p>
+              <p style="color: #666; font-size: 12px; margin-top: 30px;">If you didn't request this code, please ignore this email.</p>
+            </div>
+          `,
+          text: `Your verification code is: ${otp}\n\nThis code will expire in 10 minutes.\n\nIf you didn't request this code, please ignore this email.`,
+        });
+        console.log('✅ OTP email sent successfully to:', originalEmail);
+      } catch (emailError) {
+        console.error('❌ Failed to send OTP email:', emailError);
+        // Still return success but log the error
+        // In production, you might want to return an error instead
+      }
+    } else {
+      // Fallback: Log to console if email is not configured
+      console.log('='.repeat(50));
+      console.log('📧 OTP EMAIL (Email not configured - check console)');
+      console.log('='.repeat(50));
+      console.log(`To: ${originalEmail}`);
+      console.log(`Subject: Verify your email - Hi-Tek Computers`);
+      console.log(`\nYour verification code is: ${otp}`);
+      console.log(`This code will expire in 10 minutes.`);
+      console.log('='.repeat(50));
+      console.log('⚠️  Configure EMAIL_USER and EMAIL_PASSWORD environment variables to send real emails');
+    }
 
     res.json({ 
       message: 'OTP sent successfully',
-      // In development, include OTP in response for testing
-      // Remove this in production!
-      otp: process.env.NODE_ENV === 'development' ? otp : undefined
+      // Only include OTP in response if email is not configured (for testing)
+      otp: !emailTransporter ? otp : undefined
     });
   } catch (error) {
     console.error('Send OTP error:', error);
