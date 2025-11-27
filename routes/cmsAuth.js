@@ -23,22 +23,43 @@ const normalize = (value) => {
 // Get all CMS users
 router.get('/users', async (req, res) => {
   try {
+    console.log('Fetching CMS users from Supabase...');
     const { data, error } = await supabase
       .from('cmsusers')
       .select('*')
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Failed to fetch CMS users:', error);
-      return res.status(500).json({ error: 'Failed to fetch users' });
+      console.error('Supabase error fetching CMS users:', error);
+      console.error('Error code:', error.code);
+      console.error('Error message:', error.message);
+      console.error('Error details:', error.details);
+      return res.status(500).json({ 
+        error: 'Failed to fetch users', 
+        details: error.message,
+        code: error.code 
+      });
     }
 
+    // Ensure data is an array
+    const usersArray = Array.isArray(data) ? data : [];
+    console.log(`Found ${usersArray.length} CMS users`);
+    
     // Remove passwords from response
-    const sanitized = (data || []).map(({ password, ...user }) => user);
+    const sanitized = usersArray.map((user) => {
+      const { password, ...userWithoutPassword } = user;
+      return userWithoutPassword;
+    });
+    
     res.json(sanitized);
   } catch (err) {
     console.error('Get CMS users error:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Error stack:', err.stack);
+    res.status(500).json({ 
+      error: 'Internal server error', 
+      details: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
