@@ -718,6 +718,18 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
     }
 
     const lookupId = parseLookupId(req.params.id);
+    const tableName = category === 'printer' ? 'printers' : 'laptops';
+
+    // Get existing product to compare changes
+    const { data: existingProduct, error: existingError } = await supabase
+      .from(tableName)
+      .select('*')
+      .eq('id', lookupId)
+      .single();
+
+    if (existingError) {
+      return res.status(404).json({ error: 'Product not found.' });
+    }
 
     const details = {
       name: normalizeString(req.body.name),
@@ -785,8 +797,6 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
       coverImage = finalImages[0];
     }
 
-    const tableName = category === 'printer' ? 'printers' : 'laptops';
-
     if (requestedFeatured !== null && tableName === 'laptops' && requestedFeatured === true) {
       await ensureFeaturedLimit(tableName, true, lookupId);
     }
@@ -800,6 +810,46 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
 
     if (requestedFeatured !== null) {
       updatePayload.featured = requestedFeatured;
+    }
+
+    // Compare old vs new values to find what actually changed
+    const changedFields = [];
+    const normalizeValue = (val) => {
+      if (val === null || val === undefined || val === '') return '';
+      // Convert to string and trim, but preserve case for better comparison
+      const str = String(val).trim();
+      // For numeric fields, compare as numbers
+      if (!isNaN(str) && str !== '') {
+        return parseFloat(str);
+      }
+      return str.toLowerCase();
+    };
+
+    const compareValues = (oldVal, newVal) => {
+      // Handle null/undefined/empty
+      if ((!oldVal && !newVal) || (oldVal === '' && newVal === '')) return true;
+      if (!oldVal || !newVal) return false;
+      
+      // Try numeric comparison first
+      const oldNum = parseFloat(oldVal);
+      const newNum = parseFloat(newVal);
+      if (!isNaN(oldNum) && !isNaN(newNum)) {
+        return oldNum === newNum;
+      }
+      
+      // String comparison
+      return String(oldVal).trim().toLowerCase() === String(newVal).trim().toLowerCase();
+    };
+
+    for (const key in updatePayload) {
+      if (key === 'image' || key === 'image_urls') continue; // Skip image fields
+      
+      const oldValue = existingProduct[key];
+      const newValue = updatePayload[key];
+      
+      if (!compareValues(oldValue, newValue)) {
+        changedFields.push(key);
+      }
     }
 
     const { data, error } = await supabase
@@ -820,21 +870,23 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
       });
     }
 
-    // Log activity
-    await logActivity({
-      type: 'product_updated',
-      action: `Updated ${category}: ${data.name || details.name}`,
-      entityType: 'product',
-      entityId: data.id,
-      entityName: data.name || details.name,
-      details: {
-        category,
-        brand: data.brand || details.brand,
-        price: data.price || details.price,
-        stock: data.stock || details.stock,
-        changes: Object.keys(updatePayload),
-      },
-    }, req);
+    // Log activity - only log if there were actual changes
+    if (changedFields.length > 0) {
+      await logActivity({
+        type: 'product_updated',
+        action: `Updated ${category}: ${data.name || details.name}`,
+        entityType: 'product',
+        entityId: data.id,
+        entityName: data.name || details.name,
+        details: {
+          category,
+          brand: data.brand || details.brand,
+          price: data.price || details.price,
+          stock: data.stock || details.stock,
+          changes: changedFields, // Only the fields that actually changed
+        },
+      }, req);
+    }
 
     res.json({ product: data });
   } catch (err) {
