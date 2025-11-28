@@ -66,6 +66,7 @@ const logActivity = async (activityData, req = null) => {
       entity_id: entityId ? String(entityId) : null,
       entity_name: entityName || null,
       details: details || null,
+      created_at: new Date().toISOString(), // Explicitly set timestamp in UTC
     });
 
     if (error) {
