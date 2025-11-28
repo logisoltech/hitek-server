@@ -519,7 +519,15 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       });
     }
 
-    // Log activity
+    // Log activity - get user info from body (FormData) or headers
+    const userFromBody = req.body?.cmsUserId || req.body?.cmsUserName || req.body?.cmsUserRole 
+      ? {
+          userId: req.body.cmsUserId,
+          userName: req.body.cmsUserName,
+          userRole: req.body.cmsUserRole,
+        }
+      : null;
+    
     await logActivity({
       type: 'product_created',
       action: `Created new ${category}: ${data.name || details.name}`,
@@ -532,6 +540,10 @@ router.post('/', upload.array('images', 10), async (req, res) => {
         price: data.price || details.price,
         stock: data.stock || details.stock,
       },
+      // Pass user info directly if available from body
+      userId: userFromBody?.userId,
+      userName: userFromBody?.userName,
+      userRole: userFromBody?.userRole,
     }, req);
 
     res.status(201).json({ product: data });
@@ -872,6 +884,15 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
 
     // Log activity - only log if there were actual changes
     if (changedFields.length > 0) {
+      // Also try to get user info from request body (FormData might not send headers properly)
+      const userFromBody = req.body?.cmsUserId || req.body?.cmsUserName || req.body?.cmsUserRole 
+        ? {
+            userId: req.body.cmsUserId,
+            userName: req.body.cmsUserName,
+            userRole: req.body.cmsUserRole,
+          }
+        : null;
+      
       await logActivity({
         type: 'product_updated',
         action: `Updated ${category}: ${data.name || details.name}`,
@@ -885,6 +906,10 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
           stock: data.stock || details.stock,
           changes: changedFields, // Only the fields that actually changed
         },
+        // Pass user info directly if available from body
+        userId: userFromBody?.userId,
+        userName: userFromBody?.userName,
+        userRole: userFromBody?.userRole,
       }, req);
     }
 
