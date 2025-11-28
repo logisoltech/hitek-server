@@ -101,7 +101,7 @@ const getAccessPagesForRole = (role) => {
 // Create CMS user
 router.post('/users', async (req, res) => {
   try {
-    const { email, username, password, role, full_name } = req.body;
+    const { email, username, password, role } = req.body;
 
     if (!username) {
       return res.status(400).json({ error: 'Username is required' });
@@ -151,7 +151,6 @@ router.post('/users', async (req, res) => {
     };
 
     if (email) insertData.email = email.trim();
-    if (full_name) insertData.full_name = full_name.trim();
 
     const { data, error } = await supabase
       .from('cmsusers')
@@ -176,7 +175,7 @@ router.post('/users', async (req, res) => {
 router.put('/users/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { email, username, password, role, full_name } = req.body;
+    const { email, username, password, role } = req.body;
 
     const updateData = {};
 
@@ -193,7 +192,6 @@ router.put('/users/:id', async (req, res) => {
       // Update access pages when role changes
       updateData.accesspages = getAccessPagesForRole(role);
     }
-    if (full_name !== undefined) updateData.full_name = full_name || null;
 
     // Check for duplicate username if updating
     if (username) {
