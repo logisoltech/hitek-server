@@ -903,7 +903,7 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
           category,
           brand: data.brand || details.brand,
           price: data.price || details.price,
-          stock: data.stock || details.stock,
+          stock: data.stock, // Use the updated value from database (data), not the form input
           changes: changedFields, // Only the fields that actually changed
         },
         // Pass user info directly if available from body
