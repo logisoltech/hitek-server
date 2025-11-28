@@ -819,5 +819,185 @@ router.post('/verify-token', async (req, res) => {
   }
 });
 
+// Google OAuth - Initiate login
+router.get('/google', async (req, res) => {
+  try {
+    const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+    const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
+    const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    if (!GOOGLE_CLIENT_ID) {
+      return res.status(500).json({ error: 'Google OAuth not configured. Please set GOOGLE_CLIENT_ID environment variable.' });
+    }
+
+    // Generate state for CSRF protection
+    const state = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    
+    // Store state in session/cookie (for production, use proper session management)
+    // For now, we'll include it in the redirect URL
+    const scope = 'openid email profile';
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+      `client_id=${GOOGLE_CLIENT_ID}&` +
+      `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
+      `response_type=code&` +
+      `scope=${encodeURIComponent(scope)}&` +
+      `state=${state}&` +
+      `access_type=offline&` +
+      `prompt=consent`;
+
+    // Store state in cookie or return it to frontend
+    res.cookie('oauth_state', state, { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 600000 });
+    res.redirect(authUrl);
+  } catch (error) {
+    console.error('Google OAuth initiation error:', error);
+    res.status(500).json({ error: 'Failed to initiate Google login' });
+  }
+});
+
+// Google OAuth - Callback handler
+router.get('/google/callback', async (req, res) => {
+  try {
+    const { code, state, error } = req.query;
+    const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    if (error) {
+      console.error('Google OAuth error:', error);
+      return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent(error)}`);
+    }
+
+    if (!code) {
+      return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('No authorization code received')}`);
+    }
+
+    const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+    const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+    const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
+
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+      return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('Google OAuth not configured')}`);
+    }
+
+    // Exchange code for access token
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        code: code,
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      const errorData = await tokenResponse.json().catch(() => ({}));
+      console.error('Token exchange error:', errorData);
+      return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('Failed to exchange authorization code')}`);
+    }
+
+    const tokenData = await tokenResponse.json();
+    const accessToken = tokenData.access_token;
+
+    // Get user info from Google
+    const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!userInfoResponse.ok) {
+      console.error('Failed to fetch user info from Google');
+      return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('Failed to get user information')}`);
+    }
+
+    const googleUser = await userInfoResponse.json();
+    const { email, given_name, family_name, name, picture, id: googleId } = googleUser;
+
+    if (!email) {
+      return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('Email not provided by Google')}`);
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const originalEmail = email.trim();
+
+    // Check if user already exists
+    let allUsers, fetchError;
+    try {
+      const result = await supabase.from('users').select('*');
+      allUsers = result.data;
+      fetchError = result.error;
+    } catch (networkError) {
+      console.error('❌ Network error connecting to Supabase:', networkError);
+      return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('Database connection failed')}`);
+    }
+
+    if (fetchError) {
+      console.error('❌ Database query error:', fetchError);
+      return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('Database error')}`);
+    }
+
+    // Find existing user
+    const existingUser = allUsers?.find((u) => {
+      if (!u.email) return false;
+      const userEmail = u.email.trim().toLowerCase();
+      return userEmail === normalizedEmail;
+    });
+
+    let user;
+    if (existingUser) {
+      // User exists - login
+      user = existingUser;
+      console.log('✅ Google login successful for existing user:', originalEmail);
+    } else {
+      // New user - create account
+      console.log('Creating new user from Google OAuth:', originalEmail);
+      
+      const insertResult = await supabase
+        .from('users')
+        .insert({
+          email: originalEmail,
+          first_name: given_name || name?.split(' ')[0] || null,
+          last_name: family_name || name?.split(' ').slice(1).join(' ') || null,
+          password: `google_oauth_${googleId}`, // Special password for Google users
+          // Store Google ID for future reference
+        })
+        .select()
+        .single();
+
+      if (insertResult.error) {
+        console.error('❌ Error creating user:', insertResult.error);
+        return res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('Failed to create account')}`);
+      }
+
+      user = insertResult.data;
+      console.log('✅ Google registration successful for new user:', originalEmail);
+    }
+
+    // Create session
+    const { password: userPassword, ...userData } = user;
+    const session = {
+      access_token: 'custom_token_' + Date.now(),
+      user: {
+        id: user.id,
+        email: user.email,
+      },
+    };
+
+    // Store user data in a temporary token/code that frontend can exchange
+    // For simplicity, we'll encode it in the redirect URL (in production, use proper session storage)
+    const userToken = Buffer.from(JSON.stringify({ user: userData, session })).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    
+    // Redirect to frontend with success token
+    res.redirect(`${FRONTEND_URL}/accounts/signup?google_success=1&token=${encodeURIComponent(userToken)}`);
+  } catch (error) {
+    console.error('Google OAuth callback error:', error);
+    const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+    res.redirect(`${FRONTEND_URL}/accounts/signup?error=${encodeURIComponent('OAuth authentication failed')}`);
+  }
+});
+
 module.exports = router;
 
