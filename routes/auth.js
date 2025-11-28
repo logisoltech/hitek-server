@@ -475,9 +475,9 @@ router.post('/verify-otp', async (req, res) => {
 // Register endpoint - Store directly in users table (now requires OTP verification)
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, first_name, last_name } = req.body;
+    const { email, password, first_name, last_name, skipOTP } = req.body;
 
-    console.log('Registration attempt:', { email: email?.trim(), first_name: first_name?.trim(), last_name: last_name?.trim(), passwordLength: password?.length });
+    console.log('Registration attempt:', { email: email?.trim(), first_name: first_name?.trim(), last_name: last_name?.trim(), passwordLength: password?.length, skipOTP });
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -490,23 +490,25 @@ router.post('/register', async (req, res) => {
     const normalizedEmail = email.trim().toLowerCase();
     const originalEmail = email.trim();
 
-    // Check if OTP was verified
-    const storedData = otpStore.get(normalizedEmail);
-    if (!storedData || !storedData.verified) {
-      return res.status(400).json({ 
-        error: 'Email not verified. Please verify your email with OTP first.',
-        requiresVerification: true
-      });
-    }
+    // Check if OTP was verified (unless skipOTP is true)
+    if (!skipOTP) {
+      const storedData = otpStore.get(normalizedEmail);
+      if (!storedData || !storedData.verified) {
+        return res.status(400).json({ 
+          error: 'Email not verified. Please verify your email with OTP first.',
+          requiresVerification: true
+        });
+      }
 
-    // Check if verification is still valid (5 minutes)
-    const now = Date.now();
-    if (!storedData.verifiedAt || now - storedData.verifiedAt > 5 * 60 * 1000) {
-      otpStore.delete(normalizedEmail);
-      return res.status(400).json({ 
-        error: 'Email verification expired. Please verify your email again.',
-        requiresVerification: true
-      });
+      // Check if verification is still valid (5 minutes)
+      const now = Date.now();
+      if (!storedData.verifiedAt || now - storedData.verifiedAt > 5 * 60 * 1000) {
+        otpStore.delete(normalizedEmail);
+        return res.status(400).json({ 
+          error: 'Email verification expired. Please verify your email again.',
+          requiresVerification: true
+        });
+      }
     }
 
     // Check if user already exists by fetching all users
@@ -650,8 +652,10 @@ router.post('/register', async (req, res) => {
     console.log('✅ Registration successful for user:', originalEmail);
     console.log('✅ Inserted user ID:', insertResult.id);
 
-    // Remove OTP from store after successful registration
-    otpStore.delete(normalizedEmail);
+    // Remove OTP from store after successful registration (only if OTP was used)
+    if (!skipOTP) {
+      otpStore.delete(normalizedEmail);
+    }
 
     // Remove password from response for security
     const { password: userPassword, ...userData } = insertResult;
