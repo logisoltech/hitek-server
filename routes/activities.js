@@ -64,10 +64,6 @@ const logActivity = async (activityData, req = null) => {
   }
 };
 
-// Export the helper functions for use in other routes
-module.exports.logActivity = logActivity;
-module.exports.getUserFromRequest = getUserFromRequest;
-
 // Get all activities
 router.get('/', async (req, res) => {
   try {
@@ -117,5 +113,11 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-module.exports = router;
+// Create an export object that includes both router and helpers
+const activitiesModule = router;
+activitiesModule.logActivity = logActivity;
+activitiesModule.getUserFromRequest = getUserFromRequest;
+
+// Export the router (with helpers attached) as the main export
+module.exports = activitiesModule;
 
