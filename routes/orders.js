@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
+const { logActivity } = require('./activities');
 
 const supabaseUrl = process.env.SUPABASE_URL || 'https://svyrkggjjkbxsbvumfxj.supabase.co';
 const supabaseServiceKey =
@@ -378,6 +379,31 @@ router.patch('/:id', async (req, res) => {
         console.error('User totals update error:', err),
       );
     }
+
+    // Log activity for order status update
+    const statusMessages = {
+      'pending': 'Order marked as pending',
+      'processing': 'Order is being processed',
+      'shipped': 'Order has been shipped',
+      'delivered': 'Order has been delivered',
+      'completed': 'Order marked as fulfilled',
+      'cancelled': 'Order was cancelled',
+    };
+
+    const actionMessage = statusMessages[normalizedStatus] || `Order status updated to ${normalizedStatus}`;
+    
+    await logActivity({
+      type: normalizedStatus === 'cancelled' ? 'order_cancelled' : normalizedStatus === 'completed' ? 'order_fulfilled' : 'order_updated',
+      action: `${actionMessage}: Order #${id}`,
+      entityType: 'order',
+      entityId: id,
+      entityName: `Order #${id}`,
+      details: {
+        orderId: id,
+        previousStatus: existingOrder?.status || 'unknown',
+        newStatus: normalizedStatus,
+      },
+    }, req);
 
     res.json(data);
   } catch (error) {
