@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const { parse: parseCsv } = require('csv-parse/sync');
 const { createClient } = require('@supabase/supabase-js');
+const { logActivity } = require('./activities');
 
 const router = express.Router();
 
@@ -518,6 +519,21 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       });
     }
 
+    // Log activity
+    await logActivity({
+      type: 'product_created',
+      action: `Created new ${category}: ${data.name || details.name}`,
+      entityType: 'product',
+      entityId: data.id,
+      entityName: data.name || details.name,
+      details: {
+        category,
+        brand: data.brand || details.brand,
+        price: data.price || details.price,
+        stock: data.stock || details.stock,
+      },
+    }, req);
+
     res.status(201).json({ product: data });
   } catch (err) {
     console.error('Unexpected error creating product:', err);
@@ -650,6 +666,23 @@ router.post('/bulk/csv', upload.single('file'), async (req, res) => {
           error: error?.message || error?.details || 'Failed to insert row.',
         });
       }
+    }
+
+    // Log activity for bulk import
+    if (insertedRows.length > 0) {
+      await logActivity({
+        type: 'bulk_import',
+        action: `Imported ${insertedRows.length} new ${category}${insertedRows.length > 1 ? 's' : ''} via bulk upload`,
+        entityType: 'product',
+        entityId: null,
+        entityName: `${insertedRows.length} ${category}${insertedRows.length > 1 ? 's' : ''}`,
+        details: {
+          category,
+          count: insertedRows.length,
+          attempted: records.length,
+          failed: rowErrors.length + insertionErrors.length,
+        },
+      }, req);
     }
 
     return res.json({
@@ -786,6 +819,22 @@ router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
           'Failed to update product. Check server logs for details.',
       });
     }
+
+    // Log activity
+    await logActivity({
+      type: 'product_updated',
+      action: `Updated ${category}: ${data.name || details.name}`,
+      entityType: 'product',
+      entityId: data.id,
+      entityName: data.name || details.name,
+      details: {
+        category,
+        brand: data.brand || details.brand,
+        price: data.price || details.price,
+        stock: data.stock || details.stock,
+        changes: Object.keys(updatePayload),
+      },
+    }, req);
 
     res.json({ product: data });
   } catch (err) {
