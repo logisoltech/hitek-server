@@ -92,8 +92,7 @@ router.get('/users/:id', async (req, res) => {
 const getAccessPagesForRole = (role) => {
   const roleAccessMap = {
     admin: ['dashboard', 'products', 'orders', 'inventory', 'customers', 'settings'],
-    product_adder: ['products'],
-    inventory_manager: ['inventory'],
+    inventory_manager: ['inventory', 'products'],
     order_manager: ['orders'],
   };
   return roleAccessMap[role] || [];
