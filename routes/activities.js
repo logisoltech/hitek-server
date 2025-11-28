@@ -17,15 +17,29 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey, {
 
 // Helper function to get user info from request headers
 const getUserFromRequest = (req) => {
-  // Try to get user info from headers (sent by CMS frontend)
-  const userId = req.headers['x-cms-user-id'] || req.body?.cmsUserId || null;
-  const userName = req.headers['x-cms-user-name'] || req.body?.cmsUserName || null;
-  const userRole = req.headers['x-cms-user-role'] || req.body?.cmsUserRole || null;
+  // Express converts headers to lowercase automatically
+  // Check all possible header name variations
+  const allHeaders = req.headers;
+  const userId = allHeaders['x-cms-user-id'] || allHeaders['x-cms-user-id'] || req.body?.cmsUserId || null;
+  const userName = allHeaders['x-cms-user-name'] || allHeaders['x-cms-user-name'] || req.body?.cmsUserName || null;
+  const userRole = allHeaders['x-cms-user-role'] || allHeaders['x-cms-user-role'] || req.body?.cmsUserRole || null;
+  
+  // Debug logging to see what headers are actually received
+  const cmsHeaders = Object.keys(allHeaders).filter(k => k.toLowerCase().includes('cms') || k.toLowerCase().includes('user'));
+  if (cmsHeaders.length > 0) {
+    console.log('CMS Headers found:', cmsHeaders.map(k => ({ [k]: allHeaders[k] })));
+  }
+  
+  // If no user info found, log all headers for debugging
+  if (!userName || userName === '' || userName === 'System') {
+    console.log('No user name found in headers. Available headers:', Object.keys(allHeaders).slice(0, 20));
+    console.log('User ID:', userId, 'User Name:', userName, 'User Role:', userRole);
+  }
   
   return {
-    userId: userId ? parseInt(userId) : null,
-    userName: userName || 'System',
-    userRole: userRole || null,
+    userId: userId && userId !== '' ? parseInt(userId) : null,
+    userName: userName && userName !== '' ? userName : 'System',
+    userRole: userRole && userRole !== '' ? userRole : null,
   };
 };
 
