@@ -7,6 +7,7 @@ const laptopRoutes = require('./routes/laptops');
 const printerRoutes = require('./routes/printers');
 const productRoutes = require('./routes/products');
 const cmsAuthRoutes = require('./routes/cmsAuth');
+const activitiesRoutes = require('./routes/activities');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -33,6 +34,7 @@ app.use('/api/laptops', laptopRoutes);
 app.use('/api/printers', printerRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/cms', cmsAuthRoutes);
+app.use('/api/cms/activities', activitiesRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
