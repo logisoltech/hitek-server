@@ -285,6 +285,43 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// PATCH /api/scanners/:id/stock - Update scanner stock
+router.patch('/:id/stock', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { stock } = req.body;
+
+    const idValue = Number(id);
+    const lookupId = Number.isFinite(idValue) ? idValue : id;
+
+    const stockString = String(stock ?? '').trim();
+    const parsedStock = Number(stockString);
+    if (!Number.isFinite(parsedStock) || parsedStock < 0) {
+      return res.status(400).json({ error: 'Stock must be a non-negative number' });
+    }
+
+    const { data, error } = await supabase
+      .from('scanners')
+      .update({ stock: stockString })
+      .eq('id', lookupId)
+      .select('*')
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') {
+        return res.status(404).json({ error: 'Scanner not found' });
+      }
+      console.error('Failed to update scanner stock:', error);
+      return res.status(500).json({ error: 'Failed to update stock' });
+    }
+
+    res.json(data);
+  } catch (err) {
+    console.error('Unexpected error updating scanner stock:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // POST /api/scanners - Create a new scanner
 router.post('/', upload.array('images', 10), async (req, res) => {
   try {
