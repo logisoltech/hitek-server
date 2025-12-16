@@ -79,6 +79,11 @@ router.get('/', async (req, res) => {
         type: 'printer',
         request: supabase.from('printers').select('*'),
       });
+      // Also fetch scanners when fetching printers
+      fetchPlans.push({
+        type: 'printer', // Keep as 'printer' type so they appear in the printers page
+        request: supabase.from('scanners').select('*'),
+      });
     }
 
     if (fetchPlans.length === 0) {
