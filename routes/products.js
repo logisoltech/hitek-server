@@ -66,6 +66,8 @@ router.get('/', async (req, res) => {
       !normalizedCategory || ['laptop', 'laptops', 'notebook', 'notebooks'].includes(normalizedCategory);
     const wantsPrinters =
       !normalizedCategory || ['printer', 'printers'].includes(normalizedCategory);
+    const wantsScanners =
+      normalizedCategory && ['scanner', 'scanners'].includes(normalizedCategory);
 
     const fetchPlans = [];
     if (wantsLaptops) {
@@ -79,9 +81,18 @@ router.get('/', async (req, res) => {
         type: 'printer',
         request: supabase.from('printers').select('*'),
       });
-      // Also fetch scanners when fetching printers
+      // Also fetch scanners when fetching printers (but not when explicitly requesting scanners)
+      // Scanners should always have type='scanner' so product detail pages work correctly
+      if (!wantsScanners) {
+        fetchPlans.push({
+          type: 'scanner', // Always use 'scanner' type for correct product detail routing
+          request: supabase.from('scanners').select('*'),
+        });
+      }
+    }
+    if (wantsScanners) {
       fetchPlans.push({
-        type: 'printer', // Keep as 'printer' type so they appear in the printers page
+        type: 'scanner',
         request: supabase.from('scanners').select('*'),
       });
     }
