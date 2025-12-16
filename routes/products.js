@@ -185,6 +185,19 @@ const PRINTER_SPEC_MAP = {
   wireless: 'wireless',
 };
 
+const SCANNER_SPEC_MAP = {
+  memory: 'memory',
+  paper_types: 'paper_types',
+  paper_size: 'paper_size',
+  duplex: 'duplex',
+  resolution: 'resolution',
+  power: 'power',
+  weight: 'weight',
+  dimensions: 'dimensions',
+  color_scan: 'color_scan',
+  wireless: 'wireless',
+};
+
 const GENERAL_PRODUCT_COLUMNS = [
   'name',
   'brand',
@@ -207,6 +220,11 @@ const LAPTOP_ALLOWED_COLUMNS = [
 const PRINTER_ALLOWED_COLUMNS = [
   ...GENERAL_PRODUCT_COLUMNS,
   ...Object.values(PRINTER_SPEC_MAP),
+];
+
+const SCANNER_ALLOWED_COLUMNS = [
+  ...GENERAL_PRODUCT_COLUMNS,
+  ...Object.values(SCANNER_SPEC_MAP),
 ];
 
 const parseOptionalBoolean = (value) => {
@@ -251,6 +269,7 @@ const ensureFeaturedLimit = async (tableName, shouldBeFeatured, excludeId = null
 
 const LAPTOP_REQUIRED_COLUMNS = ['name', 'brand', 'price'];
 const PRINTER_REQUIRED_COLUMNS = ['name', 'brand', 'price'];
+const SCANNER_REQUIRED_COLUMNS = ['name', 'brand', 'price'];
 
 const buildColumnLookup = (columnList) => {
   const set = new Set(columnList);
@@ -263,6 +282,7 @@ const buildColumnLookup = (columnList) => {
 
 const LAPTOP_COLUMN_LOOKUP = buildColumnLookup(LAPTOP_ALLOWED_COLUMNS);
 const PRINTER_COLUMN_LOOKUP = buildColumnLookup(PRINTER_ALLOWED_COLUMNS);
+const SCANNER_COLUMN_LOOKUP = buildColumnLookup(SCANNER_ALLOWED_COLUMNS);
 
 const normalizeString = (value) => {
   if (value === undefined || value === null) return '';
@@ -271,7 +291,14 @@ const normalizeString = (value) => {
 };
 
 const mapSpecs = (category, specs = {}) => {
-  const map = category === 'printer' ? PRINTER_SPEC_MAP : LAPTOP_SPEC_MAP;
+  let map;
+  if (category === 'printer') {
+    map = PRINTER_SPEC_MAP;
+  } else if (category === 'scanner') {
+    map = SCANNER_SPEC_MAP;
+  } else {
+    map = LAPTOP_SPEC_MAP;
+  }
   return Object.entries(specs).reduce((acc, [key, value]) => {
     const target = map[key];
     if (!target) return acc;
@@ -409,6 +436,7 @@ const sanitizeCsvRow = (row, columnLookup) => {
 const REQUIRED_COLUMNS_LOOKUP = {
   laptop: LAPTOP_REQUIRED_COLUMNS,
   printer: PRINTER_REQUIRED_COLUMNS,
+  scanner: SCANNER_REQUIRED_COLUMNS,
 };
 
 const uploadImages = async (category, files) => {
@@ -416,7 +444,14 @@ const uploadImages = async (category, files) => {
     return { urls: [], coverUrl: '' };
   }
 
-  const bucket = category === 'printer' ? 'printer_images' : 'laptop_images';
+  let bucket;
+  if (category === 'printer') {
+    bucket = 'printer_images';
+  } else if (category === 'scanner') {
+    bucket = 'scanner_images';
+  } else {
+    bucket = 'laptop_images';
+  }
 
   const uploads = await Promise.all(
     files.map(async (file, index) => {
@@ -453,7 +488,7 @@ const uploadImages = async (category, files) => {
 router.post('/', upload.array('images', 10), async (req, res) => {
   try {
     const category = normalizeString(req.body.category).toLowerCase();
-    if (!['laptop', 'printer'].includes(category)) {
+    if (!['laptop', 'printer', 'scanner'].includes(category)) {
       return res.status(400).json({ error: 'Invalid or missing product category.' });
     }
 
@@ -493,7 +528,14 @@ router.post('/', upload.array('images', 10), async (req, res) => {
       return res.status(500).json({ error: 'Unable to determine cover image URL.' });
     }
 
-    const tableName = category === 'printer' ? 'printers' : 'laptops';
+    let tableName;
+    if (category === 'printer') {
+      tableName = 'printers';
+    } else if (category === 'scanner') {
+      tableName = 'scanners';
+    } else {
+      tableName = 'laptops';
+    }
 
     if (tableName === 'laptops') {
       await ensureFeaturedLimit(tableName, featuredFlag);
@@ -565,8 +607,8 @@ router.post('/', upload.array('images', 10), async (req, res) => {
 router.post('/bulk/csv', upload.single('file'), async (req, res) => {
   try {
     const category = normalizeString(req.body.category).toLowerCase();
-    if (!['laptop', 'printer'].includes(category)) {
-      return res.status(400).json({ error: 'Invalid or missing category. Use laptop or printer.' });
+    if (!['laptop', 'printer', 'scanner'].includes(category)) {
+      return res.status(400).json({ error: 'Invalid or missing category. Use laptop, printer, or scanner.' });
     }
 
     if (!req.file || !req.file.buffer || !req.file.buffer.length) {
@@ -591,9 +633,23 @@ router.post('/bulk/csv', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'CSV file does not contain any rows.' });
     }
 
-    const columnLookup = category === 'printer' ? PRINTER_COLUMN_LOOKUP : LAPTOP_COLUMN_LOOKUP;
+    let columnLookup;
+    if (category === 'printer') {
+      columnLookup = PRINTER_COLUMN_LOOKUP;
+    } else if (category === 'scanner') {
+      columnLookup = SCANNER_COLUMN_LOOKUP;
+    } else {
+      columnLookup = LAPTOP_COLUMN_LOOKUP;
+    }
     const requiredColumns = REQUIRED_COLUMNS_LOOKUP[category] || [];
-    const tableName = category === 'printer' ? 'printers' : 'laptops';
+    let tableName;
+    if (category === 'printer') {
+      tableName = 'printers';
+    } else if (category === 'scanner') {
+      tableName = 'scanners';
+    } else {
+      tableName = 'laptops';
+    }
 
     const sanitizedRows = [];
     const rowErrors = [];
@@ -723,19 +779,30 @@ router.post('/bulk/csv', upload.single('file'), async (req, res) => {
 router.patch('/:category/:id', upload.array('images', 10), async (req, res) => {
   try {
     const categoryParam = normalizeString(req.params.category).toLowerCase();
-    const category =
-      categoryParam === 'printer' || categoryParam === 'printers'
-        ? 'printer'
-        : categoryParam === 'laptop' || categoryParam === 'laptops'
-          ? 'laptop'
-          : null;
+    let category;
+    if (categoryParam === 'printer' || categoryParam === 'printers') {
+      category = 'printer';
+    } else if (categoryParam === 'scanner' || categoryParam === 'scanners') {
+      category = 'scanner';
+    } else if (categoryParam === 'laptop' || categoryParam === 'laptops') {
+      category = 'laptop';
+    } else {
+      category = null;
+    }
 
     if (!category) {
       return res.status(400).json({ error: 'Invalid product category.' });
     }
 
     const lookupId = parseLookupId(req.params.id);
-    const tableName = category === 'printer' ? 'printers' : 'laptops';
+    let tableName;
+    if (category === 'printer') {
+      tableName = 'printers';
+    } else if (category === 'scanner') {
+      tableName = 'scanners';
+    } else {
+      tableName = 'laptops';
+    }
 
     // Get existing product to compare changes
     const { data: existingProduct, error: existingError } = await supabase
